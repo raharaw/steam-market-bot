@@ -28,7 +28,17 @@ STEAM_API = "https://api.steampowered.com"
 CONFIG_FILE = Path(__file__).parent / "config.json"
 COOKIES_FILE = Path(__file__).parent / "cookies.json"
 DELAY_BETWEEN_ITEMS = 10
-HEADLESS_MODE = False  # Set by --headless flag
+
+# Playwright detection
+def _check_playwright() -> bool:
+    try:
+        from playwright.sync_api import sync_playwright
+        return True
+    except ImportError:
+        return False
+
+PLAYWRIGHT_AVAILABLE = _check_playwright()
+USE_PLAYWRIGHT = True  # Set False by --no-playwright flag
 
 # Currency codes → (name, symbol, fee_type, fee_value)
 CURRENCIES = {
@@ -284,9 +294,9 @@ class SteamClient:
     def scrape_buy_order(self, market_hash_name: str, app_id: int = 570) -> tuple[int | None, int | None]:
         """Scrape buy order from market page via Playwright.
         Returns (highest_buy_order_idr, lowest_sell_idr) or (None, None).
-        Returns (None, None) immediately if --headless mode.
+        Returns (None, None) if Playwright not available or disabled.
         """
-        if HEADLESS_MODE:
+        if not USE_PLAYWRIGHT or not PLAYWRIGHT_AVAILABLE:
             return None, None
 
         try:
@@ -509,8 +519,12 @@ def show_dashboard(client: SteamClient, items: list[dict], vac_info: dict | None
 
 def scan_buy_orders(client: SteamClient, items: list[dict], top_n: int = 0) -> list[dict]:
     """Scan items for buy orders via Playwright."""
-    if HEADLESS_MODE:
-        console.print("[yellow]⚠ Playwright disabled in headless mode. Scan skipped.[/yellow]")
+    if not PLAYWRIGHT_AVAILABLE:
+        console.print("[red]⚠ Playwright not installed.[/red]")
+        console.print("[dim]Install: pip install playwright && playwright install chromium[/dim]")
+        return []
+    if not USE_PLAYWRIGHT:
+        console.print("[yellow]⚠ Playwright disabled (--no-playwright). Scan skipped.[/yellow]")
         return []
 
     if top_n > 0:
@@ -762,7 +776,7 @@ def manual_list(client: SteamClient, items: list[dict]):
         console.print(f"[bold]Fetching market data for: [cyan]{item['name']}[/cyan][/bold]")
 
         buy_idr, sell_idr = None, None
-        if not HEADLESS_MODE:
+        if USE_PLAYWRIGHT and PLAYWRIGHT_AVAILABLE:
             with console.status("[cyan]Scraping buy order...[/cyan]"):
                 buy_idr, sell_idr = client.scrape_buy_order(item["mhn"], item["app_id"])
 
@@ -940,12 +954,18 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
             cur_code = cfg.get("currency", 23)
             cur_name, _, _, _ = get_fee_info(cur_code)
 
+            # Playwright status
+            if PLAYWRIGHT_AVAILABLE:
+                pw_status = "[green]Active[/green]" if USE_PLAYWRIGHT else "[yellow]Disabled (--no-playwright)[/yellow]"
+            else:
+                pw_status = "[red]Not installed[/red]"
+
             console.print(Panel(
                 f"  Steam ID     [cyan]{cfg.get('steam_id', '—')}[/cyan]\n"
                 f"  API Key      {'[green]Set[/green]' if cfg.get('api_key') else '[dim]Not set[/dim]'}\n"
                 f"  Currency     [cyan]{cur_name}[/cyan]  ·  Fee: {fee_display(cur_code)}\n"
                 f"  Cookie       {'[green]Set[/green]' if cfg.get('steam_login_secure') or COOKIES_FILE.exists() else '[red]Not set[/red]'}\n"
-                f"  Headless     {'[yellow]On[/yellow]' if HEADLESS_MODE else '[green]Off[/green]'}",
+                f"  Playwright   {pw_status}",
                 title="⚙ Settings",
                 border_style="yellow",
                 padding=(1, 2),
@@ -980,14 +1000,21 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
-    global HEADLESS_MODE
-
     parser = argparse.ArgumentParser(description="Steam Market Bot — TUI Edition")
-    parser.add_argument("--headless", action="store_true", help="Skip Playwright (no buy order scraping)")
+    parser.add_argument("--no-playwright", action="store_true", help="Disable Playwright (no buy order scraping)")
     args = parser.parse_args()
-    HEADLESS_MODE = args.headless
+    USE_PLAYWRIGHT = not args.no_playwright
 
     show_banner()
+
+    # Show Playwright status
+    if not PLAYWRIGHT_AVAILABLE:
+        console.print("[yellow]⚠ Playwright not installed — buy order scanning disabled.[/yellow]")
+        console.print("[dim]Install: pip install playwright && playwright install chromium[/dim]")
+        console.print()
+    elif not USE_PLAYWRIGHT:
+        console.print("[yellow]⚠ Playwright disabled via --no-playwright[/yellow]")
+        console.print()
 
     cfg = load_config()
 

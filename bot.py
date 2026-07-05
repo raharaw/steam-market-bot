@@ -377,66 +377,72 @@ class SteamClient:
 def show_banner():
     console.print()
     console.print(Panel(
-        "[bold cyan]╔═══════════════════════════════════════════╗[/bold cyan]\n"
-        "[bold cyan]║       🎮  Steam Market Bot  🎮            ║[/bold cyan]\n"
-        "[bold cyan]║       TUI Edition — v2.0                  ║[/bold cyan]\n"
-        "[bold cyan]╚═══════════════════════════════════════════╝[/bold cyan]",
-        border_style="cyan",
+        "[bold white]    _____ _             __  __           _       _   _          [/bold white]\n"
+        "[bold white]   / ____| |           |  \\/  |         | |     | | | |         [/bold white]\n"
+        "[bold white]  | (___ | |_ ___ _ __ | \\  / | ___   _| | __ _| |_| |__       [/bold white]\n"
+        "[bold white]   \\___ \\| __/ _ \\ '_ \\| |\\/| |/ _ \\ | | |/ _` | __| '_ \\      [/bold white]\n"
+        "[bold white]   ____) | ||  __/ |_) | |  | | (_) || | | (_| | |_| | | |     [/bold white]\n"
+        "[bold white]  |_____/ \\__\\___| .__/|_|  |_|\\___/ |_|_|\\__,_|\\__|_| |_|     [/bold white]\n"
+        "[bold white]                 | |   TUI Edition                              [/bold white]\n"
+        "[bold white]                 |_|   v2.0                                     [/bold white]",
+        border_style="bright_cyan",
+        title="[bold bright_cyan]🎮 Steam Market Bot[/bold bright_cyan]",
+        subtitle="[dim]github.com/raharaw/steam-market-bot[/dim]",
     ))
     console.print()
 
 
 def setup_wizard(cfg: dict) -> dict:
     """Interactive first-run setup wizard."""
-    console.print(Panel.fit(
-        "[bold yellow]⚙  Setup Wizard[/bold yellow]\n\n"
-        "I need your Steam credentials to access your inventory.\n"
-        "All data is saved locally in [cyan]config.json[/cyan].",
+    console.print(Panel(
+        "[bold]Welcome! Let's set up your Steam credentials.[/bold]\n"
+        "[dim]All data is saved locally — never shared.[/dim]",
+        title="[bold yellow]⚙  Setup Wizard[/bold yellow]",
         border_style="yellow",
     ))
     console.print()
 
     # ── Steam ID ──
-    console.print("[bold]1/4 · Steam ID[/bold]")
-    console.print("   Find yours at [link]https://steamid.io[/link] → [cyan]steamID64[/cyan]")
-    cfg["steam_id"] = Prompt.ask("   ➤ Steam ID64", default=cfg.get("steam_id", ""))
+    console.print("[bold cyan]1/4[/bold cyan] [bold]Steam ID[/bold]")
+    console.print("   Find yours: [link]https://steamid.io[/link] → copy [cyan]steamID64[/cyan]")
+    cfg["steam_id"] = Prompt.ask("   ➤ ", default=cfg.get("steam_id", ""))
     console.print()
 
     # ── Session Cookie ──
-    console.print("[bold]2/4 · Session Cookie[/bold]")
-    console.print("   Browser → [link]steamcommunity.com[/link] → F12 → Application → Cookies")
-    console.print("   Copy the value of [cyan]steamLoginSecure[/cyan]")
-    cfg["steam_login_secure"] = Prompt.ask("   ➤ steamLoginSecure", default=cfg.get("steam_login_secure", ""))
+    console.print("[bold cyan]2/4[/bold cyan] [bold]Session Cookie[/bold]")
+    console.print("   Browser → steamcommunity.com → F12 → Application → Cookies")
+    console.print("   Copy value of [cyan]steamLoginSecure[/cyan]")
+    cfg["steam_login_secure"] = Prompt.ask("   ➤ ", default=cfg.get("steam_login_secure", ""))
     console.print()
 
     # ── API Key ──
-    console.print("[bold]3/4 · Steam API Key [dim](optional)[/dim][/bold]")
-    console.print("   Enables VAC ban checking. Get one at [link]https://steamcommunity.com/dev/apikey[/link]")
-    cfg["api_key"] = Prompt.ask("   ➤ API Key [dim](Enter to skip)[/dim]", default=cfg.get("api_key", ""))
+    console.print("[bold cyan]3/4[/bold cyan] [bold]Steam API Key[/bold] [dim](optional, for VAC check)[/dim]")
+    console.print("   Get one: [link]https://steamcommunity.com/dev/apikey[/link]")
+    cfg["api_key"] = Prompt.ask("   ➤ [dim](Enter to skip)[/dim]", default=cfg.get("api_key", ""))
     console.print()
 
     # ── Currency ──
-    console.print("[bold]4/4 · Wallet Currency[/bold]")
+    console.print("[bold cyan]4/4[/bold cyan] [bold]Wallet Currency[/bold]")
     console.print()
 
-    ctable = Table(box=box.SIMPLE, border_style="dim")
-    ctable.add_column("Code", style="cyan")
+    ctable = Table(box=box.SIMPLE_HEAVY, border_style="dim", show_header=True, header_style="bold")
+    ctable.add_column("Code", style="cyan", justify="center")
     ctable.add_column("Currency")
-    ctable.add_column("Symbol")
+    ctable.add_column("Symbol", justify="center")
     ctable.add_column("Fee")
     for code, (name, symbol, fee_type, fee_val) in sorted(CURRENCIES.items()):
         fee_str = f"Rp {fee_val:.0f} flat" if fee_type == "flat" else f"{fee_val*100:.0f}%"
         ctable.add_row(str(code), name, symbol, fee_str)
     console.print(ctable)
     console.print()
-
-    console.print("   [dim]Common:[/dim] [cyan]23[/cyan]=IDR  [cyan]1[/cyan]=USD  [cyan]3[/cyan]=EUR")
+    console.print("   [dim]Popular:[/dim] [cyan]23[/cyan]=IDR  [cyan]1[/cyan]=USD  [cyan]3[/cyan]=EUR")
     console.print()
-    cfg["currency"] = IntPrompt.ask("   ➤ Currency code", default=cfg.get("currency", 23))
+    cfg["currency"] = IntPrompt.ask("   ➤ ", default=cfg.get("currency", 23))
     console.print()
 
     save_config(cfg)
     console.print("[green bold]✅ Setup complete![/green bold]")
+    console.print()
     return cfg
 
 
@@ -448,10 +454,9 @@ def show_dashboard(client: SteamClient, items: list[dict], vac_info: dict | None
     ok, username = client.validate_session()
     if ok:
         console.print(Panel(
-            f"[bold]{username}[/bold]\n"
-            f"[dim]Steam ID: {client.cfg['steam_id']}[/dim]",
+            f"[bold]{username}[/bold]  ·  [dim]{client.cfg['steam_id']}[/dim]",
             title="👤 Account",
-            border_style="cyan",
+            border_style="bright_cyan",
         ))
 
     # ── VAC Status ──
@@ -459,19 +464,19 @@ def show_dashboard(client: SteamClient, items: list[dict], vac_info: dict | None
         vac_banned = vac_info.get("VACBanned", False)
         game_bans = vac_info.get("NumberOfGameBans", 0)
         if vac_banned:
-            console.print(Panel("[red bold]🚫 VAC BANNED[/red bold]\nSome items may be untradeable.", border_style="red"))
+            console.print(Panel("[red bold]🚫 VAC BANNED[/red bold]  [dim]Some items may be untradeable.[/dim]", border_style="red"))
         elif game_bans > 0:
-            console.print(Panel(f"[yellow]⚠ {game_bans} Game Ban(s)[/yellow]", border_style="yellow"))
+            console.print(Panel(f"[yellow bold]⚠ {game_bans} Game Ban(s)[/yellow bold]", border_style="yellow"))
         else:
-            console.print(Panel("[green]✅ No VAC or Game Bans[/green]", border_style="green"))
+            console.print(Panel("[green]✅ Clean — No VAC or Game Bans[/green]", border_style="green"))
     else:
-        console.print("[dim]💡 Add API key for VAC ban checking[/dim]")
+        console.print("[dim]💡 Add API key in Settings for VAC ban checking[/dim]")
 
     # ── Currency ──
     cur_code = client.cfg.get("currency", 23)
     cur_name, _, _, _ = get_fee_info(cur_code)
     console.print(Panel(
-        f"[bold]{cur_name}[/bold] (code {cur_code}) · Fee: [yellow]{fee_display(cur_code)}[/yellow]",
+        f"[bold]{cur_name}[/bold]  ·  Fee: [yellow]{fee_display(cur_code)}[/yellow]",
         title="💱 Currency",
         border_style="yellow",
     ))
@@ -486,9 +491,9 @@ def show_dashboard(client: SteamClient, items: list[dict], vac_info: dict | None
         if item.get("type"):
             stats[app_id]["types"].add(item["type"])
 
-    table = Table(title="📦 Inventory", box=box.ROUNDED, border_style="cyan")
+    table = Table(box=box.ROUNDED, border_style="bright_cyan", title="📦 Inventory")
     table.add_column("Game", style="bold")
-    table.add_column("Items", justify="right", style="green")
+    table.add_column("Items", justify="right", style="green bold")
     table.add_column("Types", style="dim")
     total = 0
     for app_id, info in stats.items():
@@ -844,21 +849,22 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
 
     while True:
         console.print()
-        console.print(Panel.fit(
-            "[bold cyan]📋 Main Menu[/bold cyan]\n\n"
-            "  [bold]1[/bold]  📊  Dashboard\n"
-            "  [bold]2[/bold]  🔍  Scan for buy orders\n"
-            "  [bold]3[/bold]  📦  List → [green]highest buy order[/green]\n"
-            "  [bold]4[/bold]  📦  List → [yellow]lowest sell price[/yellow]\n"
-            "  [bold]5[/bold]  💰  Estimate inventory worth\n"
-            "  [bold]6[/bold]  🔄  Refresh inventory\n"
-            "  [bold]7[/bold]  ⚙   Settings\n"
-            "  [bold]8[/bold]  ✏️   Manual listing\n"
-            "  [bold]0[/bold]  🚪  Exit",
-            border_style="cyan",
+        console.print(Panel(
+            "[bold]1[/bold]  📊  Dashboard\n"
+            "[bold]2[/bold]  🔍  Scan for buy orders\n"
+            "[bold]3[/bold]  📦  List → [green]highest buy order[/green]\n"
+            "[bold]4[/bold]  📦  List → [yellow]lowest sell price[/yellow]\n"
+            "[bold]5[/bold]  💰  Estimate inventory worth\n"
+            "[bold]6[/bold]  🔄  Refresh inventory\n"
+            "[bold]7[/bold]  ⚙   Settings\n"
+            "[bold]8[/bold]  ✏️   Manual listing\n"
+            "[bold]0[/bold]  🚪  Exit",
+            title="[bold bright_cyan]📋 Main Menu[/bold bright_cyan]",
+            border_style="bright_cyan",
+            padding=(1, 2),
         ))
 
-        choice = Prompt.ask("\n[bold]Choose[/bold]", choices=["0","1","2","3","4","5","6","7","8"], default="1")
+        choice = Prompt.ask("[bold]➤[/bold]", choices=["0","1","2","3","4","5","6","7","8"], default="1")
 
         if choice == "0":
             console.print("[dim]Bye![/dim]")
@@ -935,21 +941,21 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
             cur_name, _, _, _ = get_fee_info(cur_code)
 
             console.print(Panel(
-                f"  Steam ID:     [cyan]{cfg.get('steam_id', '—')}[/cyan]\n"
-                f"  API Key:      {'[green]Set[/green]' if cfg.get('api_key') else '[dim]Not set[/dim]'}\n"
-                f"  Currency:     [cyan]{cur_name}[/cyan] (code {cur_code}) · Fee: {fee_display(cur_code)}\n"
-                f"  Cookie:       {'[green]Set[/green]' if cfg.get('steam_login_secure') or COOKIES_FILE.exists() else '[red]Not set[/red]'}\n"
-                f"  Headless:     {'[yellow]Yes[/yellow]' if HEADLESS_MODE else '[green]No[/green]'}",
+                f"  Steam ID     [cyan]{cfg.get('steam_id', '—')}[/cyan]\n"
+                f"  API Key      {'[green]Set[/green]' if cfg.get('api_key') else '[dim]Not set[/dim]'}\n"
+                f"  Currency     [cyan]{cur_name}[/cyan]  ·  Fee: {fee_display(cur_code)}\n"
+                f"  Cookie       {'[green]Set[/green]' if cfg.get('steam_login_secure') or COOKIES_FILE.exists() else '[red]Not set[/red]'}\n"
+                f"  Headless     {'[yellow]On[/yellow]' if HEADLESS_MODE else '[green]Off[/green]'}",
                 title="⚙ Settings",
                 border_style="yellow",
+                padding=(1, 2),
             ))
             console.print()
-            console.print("[bold]Options:[/bold]")
             console.print("  [cyan]1[/cyan]  Change currency")
-            console.print("  [cyan]2[/cyan]  Re-run full setup wizard")
+            console.print("  [cyan]2[/cyan]  Re-run setup wizard")
             console.print("  [cyan]3[/cyan]  Back")
             console.print()
-            sub = Prompt.ask("  ➤ Choose", choices=["1","2","3"], default="3")
+            sub = Prompt.ask("  [bold]➤[/bold]", choices=["1","2","3"], default="3")
             if sub == "1":
                 console.print()
                 for code, (name, symbol, ft, fv) in sorted(CURRENCIES.items()):

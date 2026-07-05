@@ -6,121 +6,81 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/YOUR_USERNAME/steam-market-bot?style=social)](https://github.com/YOUR_USERNAME/steam-market-bot)
+[![Stars](https://img.shields.io/github/stars/raharaw/steam-market-bot?style=social)](https://github.com/raharaw/steam-market-bot)
 
 **Sell your Steam items smarter. Not harder.**
 
-A terminal-based tool that scans your inventory, finds the best prices,
-and lists items on the Steam Community Market — all from your terminal.
-
-![Demo](https://via.placeholder.com/800x400/1a1a2e/00d4ff?text=Steam+Market+Bot+TUI)
+Scans your inventory → finds best prices → lists items on Steam Market.
 
 </div>
 
 ---
 
-## ✨ What It Does
+## ✨ Features
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│   📦 Scans your entire Steam inventory                      │
-│   🔍 Finds highest buy orders for each item                 │
-│   📊 Shows real-time market data                            │
-│   🏷  Lists items at buy order price (instant sale!)         │
-│   💰 Estimates total inventory worth                        │
-│   🛡  Detects VAC bans (warns if items untradeable)          │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+📦  Scan entire Steam inventory (Dota 2, Steam Cards, etc.)
+🔍  Find highest buy orders via Playwright
+🏷   List items at buy order price (instant sale!)
+📉  Or list at lowest sell price (competitive)
+✏️   Manual listing — set your own price per item
+💰  Estimate total inventory worth
+🛡   VAC ban detection
+📊  Dashboard with game stats & item types
+🏃  Headless mode (no Playwright, API only)
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Clone & Install
-
 ```bash
-git clone https://github.com/YOUR_USERNAME/steam-market-bot.git
+git clone https://github.com/raharaw/steam-market-bot.git
 cd steam-market-bot
 pip install -r requirements.txt
 playwright install chromium
-```
-
-### 2. Run
-
-```bash
 python bot.py
 ```
 
-That's it. The setup wizard will guide you through everything on first run.
+Setup wizard guides you on first run. That's it.
 
 ---
 
 ## 📖 How to Use
 
-### First Run — Setup Wizard
+### Step 1: Get Your Credentials
 
-When you run the bot for the first time, it will ask for:
-
+**Steam ID:**
 ```
-╔═══════════════════════════════════════════╗
-║           ⚙  Setup Wizard                ║
-╚═══════════════════════════════════════════╝
-
-1/4 · Steam ID
-   ➤ Enter your steamID64
-
-2/4 · Session Cookie
-   ➤ Paste your steamLoginSecure value
-
-3/4 · Steam API Key (optional)
-   ➤ For VAC ban detection
-
-4/4 · Wallet Currency
-   ➤ Pick from the table (e.g., 23 for IDR)
+1. Go to https://steamid.io
+2. Paste your Steam profile URL
+3. Copy "steamID64" (starts with 76561198...)
 ```
 
-### Getting Your Session Cookie
-
-This is the trickiest part. Here's exactly how:
-
+**Session Cookie:**
 ```
-Step 1:  Open your browser → go to steamcommunity.com
-Step 2:  Log in to your Steam account
-Step 3:  Press F12 (opens DevTools)
-Step 4:  Click "Application" tab (Chrome) or "Storage" (Firefox)
-Step 5:  Left sidebar → Cookies → steamcommunity.com
-Step 6:  Find "steamLoginSecure" → copy its VALUE
-Step 7:  Paste into the bot when prompted
+1. Open steamcommunity.com in your browser
+2. Log in to your Steam account
+3. Press F12 → Application tab → Cookies → steamcommunity.com
+4. Find "steamLoginSecure" → copy its VALUE
 ```
 
-> ⚠️ **Session cookies expire.** If you see "Session expired",
-> just repeat steps 1-7 to get a fresh one.
-
-### Getting Your Steam ID
-
+**API Key (optional, for VAC check):**
 ```
-Step 1:  Go to https://steamid.io
-Step 2:  Paste your Steam profile URL
-Step 3:  Copy the "steamID64" number (starts with 76561198...)
+1. Go to https://steamcommunity.com/dev/apikey
+2. Register with any domain (e.g., "localhost")
+3. Copy the key
 ```
 
-### Getting a Steam API Key (Optional)
+### Step 2: Run the Bot
 
-```
-Step 1:  Go to https://steamcommunity.com/dev/apikey
-Step 2:  Register with any domain name (e.g., "localhost")
-Step 3:  Copy the key
+```bash
+python bot.py
 ```
 
-> 💡 The API key enables VAC ban detection. The bot works fine without it.
+The setup wizard asks for your credentials on first run. Saved to `config.json`.
 
----
-
-## 🎯 Main Menu
-
-Once set up, you'll see the interactive menu:
+### Step 3: Use the Menu
 
 ```
 ╔═══════════════════════════════════════╗
@@ -133,6 +93,7 @@ Once set up, you'll see the interactive menu:
 ║   5  💰  Estimate inventory worth     ║
 ║   6  🔄  Refresh inventory            ║
 ║   7  ⚙   Settings                     ║
+║   8  ✏️   Manual listing               ║
 ║   0  🚪  Exit                         ║
 ║                                       ║
 ╚═══════════════════════════════════════╝
@@ -141,78 +102,69 @@ Once set up, you'll see the interactive menu:
 ### Recommended Workflow
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                                                            │
-│  Step 1:  Press 1 → see your inventory overview            │
-│                                                            │
-│  Step 2:  Press 2 → scan items for buy orders              │
-│           (this takes ~15 seconds per item)                │
-│                                                            │
-│  Step 3:  Press 3 → list at buy order (instant sale!)      │
-│           always do dry-run first!                         │
-│                                                            │
-│  Step 4:  Confirm → items listed on Steam Market           │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
+1 → See your inventory overview
+2 → Scan items for buy orders (~15s per item)
+3 → List at buy order (instant sale!)
+   → Always do dry-run first!
 ```
 
 ---
 
-## 💱 Pricing Modes
+## ✏️ Manual Listing
 
-### Mode 1: Highest Buy Order (Recommended)
-
-```
-  ┌──────────────────────────────────────────────┐
-  │  🏷  List at highest buy order price          │
-  │                                              │
-  │  • Items sell INSTANTLY                      │
-  │  • Matches the highest buy order             │
-  │  • Best for: quick sales, clearing inventory │
-  └──────────────────────────────────────────────┘
-```
-
-**How it works:**
-```
-Buy order = Rp 6,843
-
-  Steam fee (IDR)  = Rp 360 flat
-  Seller receives  = Rp 6,843 - 360 = Rp 6,483
-  Price to send    = 648,300 sen (6,483 × 100)
-
-  → Buyer pays Rp 6,843 (matches buy order!) ✅
-```
-
-### Mode 2: Lowest Sell Price
+Pick any item from your inventory, see its market data, and set your own price.
 
 ```
-  ┌──────────────────────────────────────────────┐
-  │  📉  List at lowest sell price (undercut)     │
-  │                                              │
-  │  • Competitive pricing                       │
-  │  • Undercuts current lowest seller by 1      │
-  │  • Best for: maximizing value, patient sales │
-  └──────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│  📦 Inventory (page 1/11)                   │
+│                                             │
+│   #  Item                    Game    Type   │
+│   1  Spear of Teardrop Ice   Dota 2  Common │
+│   2  Taunt: Chicken!         Dota 2  Mythic │
+│  ...                                        │
+│                                             │
+│  Enter item number, n=next, p=prev, 0=back  │
+└─────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────┐
+│  🏷 Taunt: Chicken!                         │
+│                                             │
+│  Item:      Taunt: Chicken!                 │
+│  Game:      Dota 2                          │
+│  Type:      Mythical Taunt                  │
+│                                             │
+│  Buy Order:    Rp 6,843                     │
+│  Lowest Sell:  Rp 7,307                     │
+│  Market Price: $0.04                        │
+│                                             │
+│  Fee: IDR — Rp 360 flat                     │
+└─────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────┐
+│  📋 Listing Preview                         │
+│                                             │
+│  You entered (buyer pays):  Rp 6,843        │
+│  Seller receives:           Rp 6,483        │
+│  Fee:                       Rp 360          │
+│  Price to send:             648,300 sen      │
+│  Verify → actual buyer pays: Rp 6,843 ✓    │
+│                                             │
+│  ➤ List this item? [Y/n]                    │
+└─────────────────────────────────────────────┘
 ```
 
 ---
 
-## 💰 Fee Structure
+## 💱 Pricing
 
 ### IDR (Indonesian Rupiah) — Flat Fee
 
 ```
-  ┌─────────────────────────────────────────┐
-  │  Steam charges Rp 360 per transaction   │
-  │                                         │
-  │  buyer_pays = seller_receives + Rp 360  │
-  └─────────────────────────────────────────┘
+buyer_pays = seller_receives + Rp 360
 ```
 
-**Verified test cases:**
-
-| Target (Buyer Pays) | Seller Receives | Send Price | Result |
-|:-------------------:|:---------------:|:----------:|:------:|
+| Target | Seller | Send Price | Result |
+|:------:|:------:|:----------:|:------:|
 | Rp 32,852 | Rp 32,492 | 3,249,200 sen | ✅ |
 | Rp 6,843 | Rp 6,483 | 648,300 sen | ✅ |
 | Rp 1,582 | Rp 1,222 | 122,200 sen | ✅ |
@@ -221,88 +173,53 @@ Buy order = Rp 6,843
 ### Other Currencies — ~15% Fee
 
 ```
-  ┌─────────────────────────────────────────┐
-  │  Steam takes ~15% of the sale price     │
-  │                                         │
-  │  seller_receives = buyer_pays × 0.85   │
-  └─────────────────────────────────────────┘
+seller_receives = buyer_pays × 0.85
 ```
 
 ### Supported Currencies
 
-| Code | Currency | Symbol | Fee Type |
-|:----:|:--------:|:------:|:--------:|
-| 1 | US Dollar | $ | 15% |
-| 2 | British Pound | £ | 15% |
-| 3 | Euro | € | 15% |
-| 5 | Russian Ruble | ₽ | 15% |
-| **23** | **Indonesian Rupiah** | **Rp** | **Rp 360 flat** |
-| 25 | Malaysian Ringgit | RM | 15% |
-| 27 | Singapore Dollar | S$ | 15% |
-| 28 | Thai Baht | ฿ | 15% |
-| 29 | Vietnamese Dong | ₫ | 15% |
-| 37 | Turkish Lira | ₺ | 15% |
+| Code | Currency | Fee |
+|:----:|:--------:|:---:|
+| 1 | USD ($) | 15% |
+| 3 | EUR (€) | 15% |
+| **23** | **IDR (Rp)** | **Rp 360 flat** |
+| 5 | RUB (₽) | 15% |
+| 25 | MYR (RM) | 15% |
+| 27 | SGD (S$) | 15% |
+| 28 | THB (฿) | 15% |
+| 29 | VND (₫) | 15% |
 
-> 💡 Change currency anytime via **Menu → Settings → Change currency**
+Change anytime: **Menu → Settings → Change currency**
 
 ---
 
-## 📊 Dashboard Preview
+## 🏃 Headless Mode
 
+Skip Playwright for faster startup (no buy order scanning):
+
+```bash
+python bot.py --headless
 ```
-┌─ 👤 Account ─────────────────────────────────┐
-│  Lord Cilung                                  │
-│  Steam ID: 76561198000000000                  │
-└───────────────────────────────────────────────┘
 
-┌─ 🛡 VAC Status ──────────────────────────────┐
-│  ✅ No VAC or Game Bans                       │
-└───────────────────────────────────────────────┘
+- ✅ Inventory loading works
+- ✅ Price overview works
+- ✅ Manual listing works
+- ❌ Buy order scanning disabled
+- ❌ Auto-listing modes need scan first
 
-┌─ 💱 Currency ────────────────────────────────┐
-│  IDR (code 23) · Fee: Rp 360 flat            │
-└───────────────────────────────────────────────┘
-
-┌─ 📦 Inventory ──────────────────────────────┐
-│  Game          │ Items │ Types               │
-│  ──────────────┼───────┼──────────────────── │
-│  Dota 2        │   210 │ Rare shield, ...    │
-│  Steam         │    28 │ Trading Card, ...   │
-│  ──────────────┼───────┼──────────────────── │
-│  Total         │   238 │                     │
-└───────────────────────────────────────────────┘
-```
+Use this when you only need manual listing or price checking.
 
 ---
 
 ## 🔧 Troubleshooting
 
-### "Session expired"
-
-Your `steamLoginSecure` cookie expired. Get a fresh one:
-
-```
-Browser → steamcommunity.com → F12 → Application → Cookies
-→ Copy new "steamLoginSecure" value
-→ Re-run: python bot.py → Settings → Re-run setup wizard
-```
-
-### "Inventory is private"
-
-```
-Steam → Profile → Edit Profile → Privacy Settings
-→ Set "Inventory" to "Public"
-```
-
-### "Login failed" during scan
-
-Multiple scans running at once cause session conflicts. Run one scan at a time.
-
-### Items not selling
-
-- Buy orders may have been filled by other sellers
-- Re-scan to get updated prices
-- Try "lowest sell" mode for competitive pricing
+| Problem | Solution |
+|---------|----------|
+| "Session expired" | Get fresh `steamLoginSecure` cookie, re-run setup |
+| "Inventory is private" | Steam → Profile → Privacy → Inventory → Public |
+| "Login failed" during scan | Don't run multiple scans at once |
+| Items not selling | Re-scan for updated prices, try lowest sell mode |
+| Playwright not found | Run `playwright install chromium` |
 
 ---
 
@@ -310,32 +227,26 @@ Multiple scans running at once cause session conflicts. Run one scan at a time.
 
 ```
 steam-market-bot/
-│
-├── bot.py                 ← Main script (run this)
-├── requirements.txt       ← Python dependencies
+├── bot.py                 ← Run this
+├── requirements.txt       ← Dependencies
 ├── config.example.json    ← Example config
-├── config.json            ← Your config (auto-generated, gitignored)
-├── cookies.json           ← Your session cookies (gitignored)
-├── README.md              ← This file
-└── .gitignore             ← Git ignore rules
+├── config.json            ← Your config (gitignored)
+├── cookies.json           ← Your session (gitignored)
+├── README.md
+└── .gitignore
 ```
 
 ---
 
 ## ⚠️ Disclaimer
 
-This tool is for **educational purposes only**.
-
-- Use at your own risk
-- Steam's ToS may restrict automated market operations
-- The authors are not responsible for account restrictions or bans
-- Always do a **dry run** before listing real items
+For **educational purposes only**. Use at your own risk. Steam's ToS may restrict automated operations. Always do a **dry run** before listing.
 
 ---
 
 ## 📜 License
 
-MIT — do whatever you want with it.
+MIT
 
 ---
 

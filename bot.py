@@ -10,15 +10,13 @@ Usage:
 
 import json, os, sys, time, re, argparse
 from pathlib import Path
-from datetime import datetime
 
 import requests
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.prompt import Prompt, Confirm, IntPrompt, FloatPrompt
+from rich.prompt import Prompt, Confirm, IntPrompt
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-from rich.text import Text
 from rich import box
 
 console = Console()
@@ -30,8 +28,9 @@ STEAM_API = "https://api.steampowered.com"
 CONFIG_FILE = Path(__file__).parent / "config.json"
 COOKIES_FILE = Path(__file__).parent / "cookies.json"
 DELAY_BETWEEN_ITEMS = 10
+HEADLESS_MODE = False  # Set by --headless flag
 
-# Currency codes → {code: (name, symbol, fee_type, fee_value)}
+# Currency codes → (name, symbol, fee_type, fee_value)
 CURRENCIES = {
     1:  ("USD",     "$",   "percent", 0.15),
     2:  ("GBP",     "£",   "percent", 0.15),
@@ -45,10 +44,6 @@ CURRENCIES = {
     29: ("VND",     "₫",   "percent", 0.15),
     37: ("TRY",     "₺",   "percent", 0.15),
     38: ("UAH",     "₴",   "percent", 0.15),
-    40: ("AED",     "A$",  "percent", 0.15),
-    41: ("SAR",     "SR",  "percent", 0.15),
-    42: ("QAR",     "QR",  "percent", 0.15),
-    91: ("KWD",     "KD",  "percent", 0.15),
 }
 
 DEFAULT_CONFIG = {
@@ -90,35 +85,22 @@ def save_config(cfg: dict):
 
 def get_fee_info(currency_code: int) -> tuple[str, str, str, float]:
     """Returns (name, symbol, fee_type, fee_value)."""
-    info = CURRENCIES.get(currency_code)
-    if info:
-        return info
-    return ("Unknown", "?", "percent", 0.15)
+    return CURRENCIES.get(currency_code, ("Unknown", "?", "percent", 0.15))
 
 
 def calc_listing_price(buyer_pays: int, currency_code: int) -> int:
-    """Calculate the price to send to Steam sellitem endpoint.
+    """Calculate price to send to sellitem endpoint (in sen/cents).
 
-    For IDR: flat fee Rp 360
-      buyer_pays = seller_receives + 360
-      → seller_receives = buyer_pays - 360
-      → price_to_send = seller_receives × 100  (in sen)
-
-    For others: ~15% fee
-      buyer_pays = seller_receives / (1 - 0.15)
-      → seller_receives = buyer_pays × 0.85
-      → price_to_send = seller_receives × 100
-
-    Returns price in sen (or cents) to send to sellitem endpoint.
+    Given the desired buyer_pays amount:
+      IDR (flat):  seller = buyer_pays - 360,  send = seller × 100
+      Others (%):  seller = buyer_pays × 0.85, send = seller × 100
     """
-    _, symbol, fee_type, fee_value = get_fee_info(currency_code)
-
+    _, _, fee_type, fee_value = get_fee_info(currency_code)
     if fee_type == "flat":
         seller = max(1, buyer_pays - int(fee_value))
     else:
         seller = max(1, int(buyer_pays * (1 - fee_value)))
-
-    return seller * 100  # Convert to sen/cents
+    return seller * 100
 
 
 def calc_buyer_pays(seller_receives: int, currency_code: int) -> int:
@@ -126,21 +108,28 @@ def calc_buyer_pays(seller_receives: int, currency_code: int) -> int:
     _, _, fee_type, fee_value = get_fee_info(currency_code)
     if fee_type == "flat":
         return seller_receives + int(fee_value)
-    else:
-        return int(seller_receives / (1 - fee_value))
-
-
-def fmt_price(amount: int, currency_code: int) -> str:
-    """Format price with currency symbol."""
-    _, symbol, _, _ = get_fee_info(currency_code)
-    if currency_code == 1:  # USD
-        return f"${amount/100:.2f}"
-    return f"{symbol} {amount:,}"
+    return int(seller_receives / (1 - fee_value))
 
 
 def fmt_idr(amount: int) -> str:
     """Format IDR amount."""
     return f"Rp {amount:,}"
+
+
+def fmt_price(amount: int, currency_code: int) -> str:
+    """Format price with currency symbol."""
+    name, symbol, _, _ = get_fee_info(currency_code)
+    if currency_code == 1:  # USD cents
+        return f"${amount/100:.2f}"
+    return f"{symbol} {amount:,}"
+
+
+def fee_display(currency_code: int) -> str:
+    """Human-readable fee string."""
+    _, symbol, fee_type, fee_val = get_fee_info(currency_code)
+    if fee_type == "flat":
+        return f"{symbol} {int(fee_val)} flat"
+    return f"{int(fee_val * 100)}%"
 
 
 # ─── Steam Client ───────────────────────────────────────────────────────────
@@ -162,20 +151,23 @@ class SteamClient:
         elif cfg.get("steam_login_secure"):
             self.session.cookies.set("steamLoginSecure", cfg["steam_login_secure"], domain="steamcommunity.com")
 
+    # ── Validation ──
+
     def validate_session(self) -> tuple[bool, str]:
         """Check if session is valid. Returns (ok, username_or_error)."""
         try:
             r = self.session.get(f"{STEAM_COMMUNITY}/my/", allow_redirects=False, timeout=10)
             if r.status_code == 302 and "login" in r.headers.get("Location", "").lower():
-                return False, "Session expired"
+                return False, "Session expired — update steamLoginSecure"
             match = re.search(r'<title>Steam Community :: (.+?)</title>', r.text)
-            username = match.group(1) if match else "Unknown"
-            return True, username
+            return True, match.group(1) if match else "Unknown"
         except Exception as e:
             return False, str(e)
 
+    # ── VAC Bans ──
+
     def get_vac_bans(self) -> dict | None:
-        """Check VAC ban status."""
+        """Check VAC ban status. Returns None if no API key."""
         if not self.cfg.get("api_key"):
             return None
         try:
@@ -184,20 +176,21 @@ class SteamClient:
                 params={"steamids": self.cfg["steam_id"]},
                 timeout=10,
             )
-            data = r.json()
-            players = data.get("players", [])
+            players = r.json().get("players", [])
             return players[0] if players else None
         except Exception:
             return None
 
+    # ── Inventory ──
+
     def get_inventory(self, app_id: int, context_id: int) -> list[dict]:
         """Fetch inventory items for an app."""
-        # Init session
         self.session.get(f"{STEAM_COMMUNITY}/my/", timeout=10)
         time.sleep(2)
 
         url = f"{STEAM_COMMUNITY}/inventory/{self.cfg['steam_id']}/{app_id}/{context_id}"
         items_out = []
+        seen = set()
         start_assetid = None
 
         while True:
@@ -207,11 +200,11 @@ class SteamClient:
 
             r = self.session.get(url, params=params, timeout=30)
             if r.status_code != 200:
-                return items_out
+                break
 
             data = r.json()
             if not data or not data.get("success"):
-                return items_out
+                break
 
             # Build description lookup
             descs = {}
@@ -219,17 +212,15 @@ class SteamClient:
                 key = f"{d['classid']}_{d.get('instanceid', '0')}"
                 descs[key] = d
 
-            seen = set()
             for asset in data.get("assets", []):
-                key = f"{asset['classid']}_{asset.get('instanceid', '0')}"
-                desc = descs.get(key, {})
                 aid = asset["assetid"]
-
                 if aid in seen:
                     continue
-                if not desc.get("marketable"):
-                    continue
-                if not desc.get("tradable"):
+
+                key = f"{asset['classid']}_{asset.get('instanceid', '0')}"
+                desc = descs.get(key, {})
+
+                if not desc.get("marketable") or not desc.get("tradable"):
                     continue
 
                 seen.add(aid)
@@ -263,6 +254,8 @@ class SteamClient:
             console.print(f"  [cyan]{app['name']}[/cyan]: {len(items)} marketable")
         return all_items
 
+    # ── Pricing ──
+
     def get_price_overview(self, market_hash_name: str, app_id: int = 570) -> dict | None:
         """Get price overview from Steam API."""
         try:
@@ -290,7 +283,12 @@ class SteamClient:
 
     def scrape_buy_order(self, market_hash_name: str, app_id: int = 570) -> tuple[int | None, int | None]:
         """Scrape buy order from market page via Playwright.
-        Returns (highest_buy_order_idr, lowest_sell_idr) or (None, None)."""
+        Returns (highest_buy_order_idr, lowest_sell_idr) or (None, None).
+        Returns (None, None) immediately if --headless mode.
+        """
+        if HEADLESS_MODE:
+            return None, None
+
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -305,7 +303,6 @@ class SteamClient:
                 ctx = browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
                 )
-                # Add cookies
                 if COOKIES_FILE.exists():
                     with open(COOKIES_FILE) as f:
                         cookies_data = json.load(f)
@@ -324,7 +321,7 @@ class SteamClient:
             buy_idr = None
             sell_idr = None
 
-            # Buy order: "X requests to buy at Rp Y or lower"
+            # "X requests to buy at Rp Y or lower"
             buy_match = re.search(
                 r'(\d[\d.,]*)\s+requests?\s+to\s+buy\s+at\s+Rp\s*([\d.,]+)',
                 content, re.IGNORECASE
@@ -332,7 +329,7 @@ class SteamClient:
             if buy_match:
                 buy_idr = int(buy_match.group(2).replace(".", "").replace(",", ""))
 
-            # Lowest sell: "Starting at: Rp X"
+            # "Starting at: Rp X"
             sell_match = re.search(
                 r'Starting\s+at:\s+Rp\s*([\d.,]+)',
                 content, re.IGNORECASE
@@ -343,6 +340,8 @@ class SteamClient:
             return buy_idr, sell_idr
         except Exception:
             return None, None
+
+    # ── Listing ──
 
     def sell_item(self, item: dict, price_sen: int) -> tuple[bool, str]:
         """List an item on the market. price_sen = price in sen/cents."""
@@ -362,6 +361,15 @@ class SteamClient:
         if res.get("success") == 1:
             return True, "OK"
         return False, res.get("message", str(res))
+
+    # ── Helpers ──
+
+    def get_app_name(self, app_id: int) -> str:
+        """Get app name from config."""
+        return next(
+            (a["name"] for a in self.cfg.get("apps", []) if a["app_id"] == app_id),
+            f"App {app_id}"
+        )
 
 
 # ─── TUI Screens ─────────────────────────────────────────────────────────────
@@ -411,7 +419,6 @@ def setup_wizard(cfg: dict) -> dict:
     console.print("[bold]4/4 · Wallet Currency[/bold]")
     console.print()
 
-    # Show currency table
     ctable = Table(box=box.SIMPLE, border_style="dim")
     ctable.add_column("Code", style="cyan")
     ctable.add_column("Currency")
@@ -423,11 +430,7 @@ def setup_wizard(cfg: dict) -> dict:
     console.print(ctable)
     console.print()
 
-    # Interactive currency selection
-    console.print("   [dim]Common choices:[/dim]")
-    console.print("     [cyan]23[/cyan] = IDR (Indonesian Rupiah) — flat fee Rp 360")
-    console.print("     [cyan]1[/cyan]  = USD (US Dollar) — 15% fee")
-    console.print("     [cyan]3[/cyan]  = EUR (Euro) — 15% fee")
+    console.print("   [dim]Common:[/dim] [cyan]23[/cyan]=IDR  [cyan]1[/cyan]=USD  [cyan]3[/cyan]=EUR")
     console.print()
     cfg["currency"] = IntPrompt.ask("   ➤ Currency code", default=cfg.get("currency", 23))
     console.print()
@@ -464,15 +467,11 @@ def show_dashboard(client: SteamClient, items: list[dict], vac_info: dict | None
     else:
         console.print("[dim]💡 Add API key for VAC ban checking[/dim]")
 
-    # ── Currency Info ──
-    cur_code = client.cfg.get("currency", 1)
-    cur_name, cur_symbol, fee_type, fee_val = get_fee_info(cur_code)
-    if fee_type == "flat":
-        fee_str = f"{cur_symbol} {fee_val:.0f} flat"
-    else:
-        fee_str = f"{fee_val*100:.0f}%"
+    # ── Currency ──
+    cur_code = client.cfg.get("currency", 23)
+    cur_name, _, _, _ = get_fee_info(cur_code)
     console.print(Panel(
-        f"[bold]{cur_name}[/bold] (code {cur_code}) · Fee: [yellow]{fee_str}[/yellow]",
+        f"[bold]{cur_name}[/bold] (code {cur_code}) · Fee: [yellow]{fee_display(cur_code)}[/yellow]",
         title="💱 Currency",
         border_style="yellow",
     ))
@@ -482,8 +481,7 @@ def show_dashboard(client: SteamClient, items: list[dict], vac_info: dict | None
     for item in items:
         app_id = item["app_id"]
         if app_id not in stats:
-            app_name = next((a["name"] for a in client.cfg.get("apps", []) if a["app_id"] == app_id), f"App {app_id}")
-            stats[app_id] = {"name": app_name, "count": 0, "types": set()}
+            stats[app_id] = {"name": client.get_app_name(app_id), "count": 0, "types": set()}
         stats[app_id]["count"] += 1
         if item.get("type"):
             stats[app_id]["types"].add(item["type"])
@@ -506,12 +504,16 @@ def show_dashboard(client: SteamClient, items: list[dict], vac_info: dict | None
 
 def scan_buy_orders(client: SteamClient, items: list[dict], top_n: int = 0) -> list[dict]:
     """Scan items for buy orders via Playwright."""
+    if HEADLESS_MODE:
+        console.print("[yellow]⚠ Playwright disabled in headless mode. Scan skipped.[/yellow]")
+        return []
+
     if top_n > 0:
         items = items[:top_n]
 
     results = []
     console.print(f"\n[bold]🔍 Scanning {len(items)} items for buy orders...[/bold]")
-    console.print("[dim]This uses Playwright (headless browser). ~15s per item.[/dim]\n")
+    console.print("[dim]Uses Playwright (headless browser). ~15s per item.[/dim]\n")
 
     with Progress(
         SpinnerColumn(),
@@ -522,7 +524,7 @@ def scan_buy_orders(client: SteamClient, items: list[dict], top_n: int = 0) -> l
         console=console,
     ) as progress:
         task = progress.add_task("Scanning...", total=len(items))
-        for i, item in enumerate(items):
+        for item in items:
             progress.update(task, description=f"[cyan]{item['name'][:35]}[/cyan]")
             buy_idr, sell_idr = client.scrape_buy_order(item["mhn"], item["app_id"])
             if buy_idr:
@@ -546,24 +548,23 @@ def list_items(client: SteamClient, items: list[dict], scan_results: list[dict],
     """List items on the market.
 
     mode: 'buy_order' — sell at highest buy order (instant sale)
-          'lowest'    — sell at lowest sell price (competitive, undercut by 1)
+          'lowest'    — sell at lowest sell price (undercut by 1)
     """
     cur_code = client.cfg.get("currency", 23)
-    cur_name, cur_symbol, fee_type, fee_val = get_fee_info(cur_code)
+    cur_name, _, fee_type, fee_val = get_fee_info(cur_code)
 
     console.print()
     mode_label = "[green]Highest Buy Order[/green]" if mode == "buy_order" else "[yellow]Lowest Sell[/yellow]"
     console.print(f"[bold]📋 Listing {len(scan_results)} items — Mode: {mode_label}[/bold]")
-    console.print(f"[dim]Currency: {cur_name} · Fee: {fee_type} {fee_val}[/dim]")
+    console.print(f"[dim]Currency: {cur_name} · Fee: {fee_display(cur_code)}[/dim]")
     if dry_run:
         console.print("[yellow bold]⚠ DRY RUN — nothing will be listed[/yellow bold]")
     console.print()
 
-    # Build inventory lookup (mhn → item)
-    inv_map = {}
+    # Build inventory lookup: mhn → list of items (handle duplicates)
+    inv_map: dict[str, list[dict]] = {}
     for item in items:
-        if item["mhn"] not in inv_map:
-            inv_map[item["mhn"]] = item
+        inv_map.setdefault(item["mhn"], []).append(item)
 
     table = Table(box=box.ROUNDED, border_style="cyan")
     table.add_column("#", justify="right", style="dim")
@@ -580,32 +581,28 @@ def list_items(client: SteamClient, items: list[dict], scan_results: list[dict],
 
     for i, r in enumerate(scan_results):
         mhn = r["mhn"]
-        inv_item = inv_map.get(mhn)
-
         buy_str = fmt_idr(r["buy_order"])
         sell_str = fmt_idr(r["sell"]) if r.get("sell") else "—"
 
-        if not inv_item:
+        # Get next available item from inventory
+        inv_list = inv_map.get(mhn, [])
+        if not inv_list:
             table.add_row(str(i+1), r["name"][:35], buy_str, sell_str, "—", "—", "[dim]Not in inventory[/dim]")
             continue
 
-        # Calculate listing price
+        # Calculate target price
         if mode == "buy_order":
-            # buyer_pays = buy_order, so seller = buy_order - fee
             target_buyer = r["buy_order"]
         else:
-            # Undercut lowest sell by 1
             if r.get("sell") and r["sell"] > 1:
                 target_buyer = r["sell"] - 1
             else:
                 table.add_row(str(i+1), r["name"][:35], buy_str, sell_str, "—", "—", "[yellow]No sell data[/yellow]")
                 continue
 
-        # Convert target_buyer → price to send
         price_to_send = calc_listing_price(target_buyer, cur_code)
-
-        # Verify: what does buyer actually pay?
-        actual_buyer = calc_buyer_pays(price_to_send // 100, cur_code)
+        seller = price_to_send // 100
+        actual_buyer = calc_buyer_pays(seller, cur_code)
         list_str = fmt_idr(target_buyer)
         buyer_str = fmt_idr(actual_buyer)
 
@@ -613,12 +610,12 @@ def list_items(client: SteamClient, items: list[dict], scan_results: list[dict],
             table.add_row(str(i+1), r["name"][:35], buy_str, sell_str, list_str, buyer_str, "[yellow]DRY-RUN[/yellow]")
             total_revenue += target_buyer
         else:
+            inv_item = inv_list.pop(0)  # Take first available, remove from list
             ok, msg = client.sell_item(inv_item, price_to_send)
             if ok:
                 table.add_row(str(i+1), r["name"][:35], buy_str, sell_str, list_str, buyer_str, "[green]✓[/green]")
                 total_ok += 1
                 total_revenue += target_buyer
-                inv_map.pop(mhn, None)
             else:
                 table.add_row(str(i+1), r["name"][:35], buy_str, sell_str, list_str, buyer_str, f"[red]✗ {msg}[/red]")
                 total_fail += 1
@@ -627,14 +624,10 @@ def list_items(client: SteamClient, items: list[dict], scan_results: list[dict],
 
     console.print(table)
     console.print()
-    if fee_type == "flat":
-        fee_display = f"Rp {fee_val:.0f}"
-    else:
-        fee_display = f"{fee_val*100:.0f}%"
     console.print(Panel(
         f"[green]Listed: {total_ok}[/green]  [red]Failed: {total_fail}[/red]\n"
         f"[bold]Est. Revenue: {fmt_idr(total_revenue)}[/bold]\n"
-        f"[dim]Fee: {fee_display} per item ({cur_name})[/dim]",
+        f"[dim]Fee: {fee_display(cur_code)} per item ({cur_name})[/dim]",
         title="📊 Results",
         border_style="green" if total_ok > 0 else ("red" if total_fail > 0 else "yellow"),
     ))
@@ -647,8 +640,8 @@ def estimate_worth(client: SteamClient, items: list[dict]):
     console.print("[dim]Uses Steam's priceoverview API — ~1.5s per item.[/dim]")
     console.print()
 
-    total_low = 0.0
-    total_median = 0.0
+    cur_code = client.cfg.get("currency", 1)
+    total = 0.0
     priced = 0
     failed = 0
 
@@ -665,44 +658,57 @@ def estimate_worth(client: SteamClient, items: list[dict]):
             progress.update(task, description=f"[cyan]{item['name'][:35]}[/cyan]")
             data = client.get_price_overview(item["mhn"], item["app_id"])
             if data:
-                low = re.sub(r'[^\d.]', '', data.get("lowest", ""))
-                med = re.sub(r'[^\d.]', '', data.get("median", ""))
-                if low:
-                    total_low += float(low)
-                    priced += 1
-                if med:
-                    total_median += float(med)
+                price_str = data.get("lowest", "")
+                # Parse price: remove currency symbols, handle thousand separators
+                cleaned = re.sub(r'[^\d.,]', '', price_str)
+                if cleaned:
+                    # Handle "1,582" (thousands) vs "1.58" (decimal)
+                    if "," in cleaned and "." in cleaned:
+                        cleaned = cleaned.replace(",", "")
+                    elif "," in cleaned:
+                        parts = cleaned.split(",")
+                        cleaned = cleaned.replace(",", "") if len(parts[-1]) == 3 else cleaned.replace(",", ".")
+                    try:
+                        total += float(cleaned)
+                        priced += 1
+                    except ValueError:
+                        failed += 1
+                else:
+                    failed += 1
             else:
                 failed += 1
             progress.advance(task)
             time.sleep(1.5)
 
+    symbol = get_fee_info(cur_code)[1]
+    if cur_code == 1:
+        total_str = f"${total:,.2f}"
+    else:
+        total_str = f"{symbol} {total:,.0f}"
+
     console.print()
     console.print(Panel(
-        f"[green]Lowest prices total:[/green]  [bold]${total_low:,.2f}[/bold]\n"
-        f"[green]Median prices total:[/green]  [bold]${total_median:,.2f}[/bold]\n"
+        f"[green]Estimated total:[/green]  [bold]{total_str}[/bold]\n"
         f"[dim]Priced: {priced} | Failed: {failed} | Total: {len(items)}[/dim]",
         title="💰 Inventory Worth",
         border_style="green",
     ))
 
 
-# ─── Main Menu ───────────────────────────────────────────────────────────────
+# ─── Manual Listing ──────────────────────────────────────────────────────────
 
 def manual_list(client: SteamClient, items: list[dict]):
     """Manual listing: user picks an item, sees market data, inputs price."""
     cur_code = client.cfg.get("currency", 23)
-    cur_name, cur_symbol, fee_type, fee_val = get_fee_info(cur_code)
-    app_map = {a["app_id"]: a["name"] for a in client.cfg.get("apps", [])}
+    cur_name, _, fee_type, fee_val = get_fee_info(cur_code)
 
     console.print()
     console.print("[bold cyan]✏️  Manual Listing[/bold cyan]")
     console.print()
 
-    # Show inventory with numbers
     page_size = 20
     page = 0
-    total_pages = (len(items) - 1) // page_size + 1
+    total_pages = max(1, (len(items) - 1) // page_size + 1)
 
     while True:
         start = page * page_size
@@ -717,12 +723,11 @@ def manual_list(client: SteamClient, items: list[dict]):
 
         for i, item in enumerate(page_items):
             idx = start + i + 1
-            game = app_map.get(item["app_id"], f"App {item['app_id']}")
-            table.add_row(str(idx), item["name"][:40], game, item.get("type", "")[:25])
+            table.add_row(str(idx), item["name"][:40], client.get_app_name(item["app_id"]), item.get("type", "")[:25])
 
         console.print(table)
         console.print()
-        console.print(f"[dim]Enter item number (1-{len(items)}), [cyan]n[/cyan]=next page, [cyan]p[/cyan]=prev page, [cyan]0[/cyan]=back[/dim]")
+        console.print(f"[dim]Item number (1-{len(items)}), [cyan]n[/cyan]=next, [cyan]p[/cyan]=prev, [cyan]0[/cyan]=back[/dim]")
         choice = Prompt.ask("  ➤ Choose")
 
         if choice == "0":
@@ -737,83 +742,88 @@ def manual_list(client: SteamClient, items: list[dict]):
         try:
             idx = int(choice) - 1
         except ValueError:
-            console.print("[red]Invalid input[/red]")
+            console.print("[red]Invalid — enter a number[/red]")
             continue
 
         if idx < 0 or idx >= len(items):
-            console.print("[red]Item not found[/red]")
+            console.print(f"[red]Enter 1-{len(items)}[/red]")
             continue
 
         item = items[idx]
-        game = app_map.get(item["app_id"], f"App {item['app_id']}")
+        game = client.get_app_name(item["app_id"])
 
         # Fetch market data
         console.print()
         console.print(f"[bold]Fetching market data for: [cyan]{item['name']}[/cyan][/bold]")
-        with console.status("[cyan]Scraping buy order...[/cyan]"):
-            buy_idr, sell_idr = client.scrape_buy_order(item["mhn"], item["app_id"])
 
-        # Also try priceoverview
+        buy_idr, sell_idr = None, None
+        if not HEADLESS_MODE:
+            with console.status("[cyan]Scraping buy order...[/cyan]"):
+                buy_idr, sell_idr = client.scrape_buy_order(item["mhn"], item["app_id"])
+
         with console.status("[cyan]Getting price overview...[/cyan]"):
             price_data = client.get_price_overview(item["mhn"], item["app_id"])
 
+        # Show item info
         console.print()
-        console.print(Panel(
-            f"  [bold]Item:[/bold]      {item['name']}\n"
-            f"  [bold]Game:[/bold]      {game}\n"
-            f"  [bold]Type:[/bold]      {item.get('type', '—')}\n"
-            f"\n"
-            f"  [cyan]Buy Order:[/cyan]    {fmt_idr(buy_idr) if buy_idr else '[dim]None[/dim]'}\n"
-            f"  [yellow]Lowest Sell:[/yellow] {fmt_idr(sell_idr) if sell_idr else '[dim]None[/dim]'}\n"
-            f"  [dim]Price Overview:[/dim]  {price_data.get('lowest', '—') if price_data else '—'}\n"
-            f"\n"
-            f"  [dim]Fee: {cur_name} — {'Rp '+str(int(fee_val))+' flat' if fee_type=='flat' else str(int(fee_val*100))+'%'}</dim>",
-            title=f"🏷 {item['name']}",
-            border_style="cyan",
-        ))
+        info_lines = [
+            f"  [bold]Item:[/bold]      {item['name']}",
+            f"  [bold]Game:[/bold]      {game}",
+            f"  [bold]Type:[/bold]      {item.get('type') or '—'}",
+            "",
+            f"  [cyan]Buy Order:[/cyan]    {fmt_idr(buy_idr) if buy_idr else '[dim]None[/dim]'}",
+            f"  [yellow]Lowest Sell:[/yellow] {fmt_idr(sell_idr) if sell_idr else '[dim]None[/dim]'}",
+        ]
+        if price_data:
+            info_lines.append(f"  [dim]Market Price:[/dim]   {price_data.get('lowest', '—')}")
+        info_lines.append("")
+        info_lines.append(f"  [dim]Fee: {cur_name} — {fee_display(cur_code)}[/dim]")
+        console.print(Panel("\n".join(info_lines), title=f"🏷 {item['name']}", border_style="cyan"))
 
+        # Price input
         console.print()
-        console.print(f"[bold]Enter price as [cyan]buyer pays[/cyan] amount ({cur_name})[/bold]")
+        console.print(f"[bold]Enter [cyan]buyer pays[/cyan] amount ({cur_name})[/bold]")
         if buy_idr:
-            console.print(f"  [dim]Buy order: {fmt_idr(buy_idr)} → instant sale[/dim]")
+            console.print(f"  [cyan]{fmt_idr(buy_idr)}[/cyan] = buy order (instant sale)")
         if sell_idr:
-            console.print(f"  [dim]Lowest sell: {fmt_idr(sell_idr)} → competitive[/dim]")
-        console.print(f"  [dim]Enter 0 to skip this item[/dim]")
+            console.print(f"  [yellow]{fmt_idr(sell_idr)}[/yellow] = lowest sell (competitive)")
+        console.print(f"  [dim]0 = skip[/dim]")
         console.print()
 
-        price_input = IntPrompt.ask("  ➤ Buyer pays amount", default=buy_idr or sell_idr or 0)
+        # Default to buy_order if available, else sell
+        default_price = buy_idr or sell_idr or 0
+        price_input = IntPrompt.ask("  ➤ Amount", default=default_price)
 
         if price_input <= 0:
             console.print("[dim]Skipped[/dim]")
             continue
 
-        # Calculate listing price
+        # Calculate & verify
         price_to_send = calc_listing_price(price_input, cur_code)
         seller = price_to_send // 100
         actual_buyer = calc_buyer_pays(seller, cur_code)
-
-        if fee_type == "flat":
-            fee_display = f"Rp {int(fee_val)}"
-        else:
-            fee_display = f"{int(fee_val*100)}%"
 
         console.print()
         console.print(Panel(
             f"  [bold]You entered (buyer pays):[/bold]  {fmt_idr(price_input)}\n"
             f"  [green]Seller receives:[/green]         {fmt_idr(seller)}\n"
-            f"  [yellow]Fee:[/yellow]                    {fee_display}\n"
-            f"  [cyan]Price to send:[/cyan]            {price_to_send} sen\n"
-            f"  [dim]Verify → buyer pays:[/dim]       {fmt_idr(actual_buyer)}",
+            f"  [yellow]Fee:[/yellow]                    {fee_display(cur_code)}\n"
+            f"  [cyan]Price to send:[/cyan]            {price_to_send:,} sen\n"
+            f"  [dim]Verify → actual buyer pays:[/dim] {fmt_idr(actual_buyer)}",
             title="📋 Listing Preview",
             border_style="yellow",
         ))
+
+        # Verify match
+        if actual_buyer != price_input:
+            console.print(f"[yellow]⚠ Note: buyer will pay {fmt_idr(actual_buyer)}, not {fmt_idr(price_input)}[/yellow]")
 
         console.print()
         if not Confirm.ask("  ➤ List this item?", default=True):
             console.print("[dim]Cancelled[/dim]")
             continue
 
-        # List it
+        # List
         ok, msg = client.sell_item(item, price_to_send)
         if ok:
             console.print(f"[green bold]✅ Listed! Buyer pays {fmt_idr(actual_buyer)}[/green bold]")
@@ -822,9 +832,11 @@ def manual_list(client: SteamClient, items: list[dict]):
             console.print(f"[red bold]✗ Failed: {msg}[/red bold]")
 
         console.print()
-        if not Confirm.ask("  List another item?", default=True):
+        if not Confirm.ask("  List another?", default=True):
             return
 
+
+# ─── Main Menu ───────────────────────────────────────────────────────────────
 
 def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
     """Main interactive menu."""
@@ -836,12 +848,12 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
             "[bold cyan]📋 Main Menu[/bold cyan]\n\n"
             "  [bold]1[/bold]  📊  Dashboard\n"
             "  [bold]2[/bold]  🔍  Scan for buy orders\n"
-            "  [bold]3[/bold]  📦  List items → [green]highest buy order[/green]\n"
-            "  [bold]4[/bold]  📦  List items → [yellow]lowest sell price[/yellow]\n"
+            "  [bold]3[/bold]  📦  List → [green]highest buy order[/green]\n"
+            "  [bold]4[/bold]  📦  List → [yellow]lowest sell price[/yellow]\n"
             "  [bold]5[/bold]  💰  Estimate inventory worth\n"
             "  [bold]6[/bold]  🔄  Refresh inventory\n"
             "  [bold]7[/bold]  ⚙   Settings\n"
-            "  [bold]8[/bold]  ✏️   Manual listing (set price yourself)\n"
+            "  [bold]8[/bold]  ✏️   Manual listing\n"
             "  [bold]0[/bold]  🚪  Exit",
             border_style="cyan",
         ))
@@ -858,13 +870,12 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
         elif choice == "2":
             console.print()
             console.print("[bold]Scan options:[/bold]")
-            console.print("  [cyan]0[/cyan] = scan ALL items (slow, ~15s each)")
-            console.print("  [cyan]N[/cyan] = scan first N items")
+            console.print("  [cyan]0[/cyan] = all items (slow)")
+            console.print("  [cyan]N[/cyan] = first N items")
             n = IntPrompt.ask("  ➤ How many?", default=0)
             scan_cache = scan_buy_orders(client, items, top_n=n)
             if scan_cache:
-                console.print(f"\n[green bold]✅ Found {len(scan_cache)} items with buy orders![/green bold]")
-                # Show summary table
+                console.print(f"\n[green bold]✅ Found {len(scan_cache)} items with buy orders[/green bold]")
                 stable = Table(title="📋 Scan Results", box=box.ROUNDED, border_style="cyan")
                 stable.add_column("#", justify="right", style="dim")
                 stable.add_column("Item")
@@ -884,7 +895,7 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
                 continue
             console.print()
             console.print("[bold]🏷 Listing at [green]highest buy order[/green][/bold]")
-            console.print("[dim]Items will sell instantly at the buy order price.[/dim]")
+            console.print("[dim]Items sell instantly at buy order price.[/dim]")
             console.print()
             dry = Confirm.ask("  Dry run first?", default=True)
             list_items(client, items, scan_cache, mode="buy_order", dry_run=dry)
@@ -921,14 +932,14 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
             console.print()
             cfg = client.cfg
             cur_code = cfg.get("currency", 23)
-            cur_name, cur_symbol, fee_type, fee_val = get_fee_info(cur_code)
-            fee_str = f"Rp {fee_val:.0f} flat" if fee_type == "flat" else f"{fee_val*100:.0f}%"
+            cur_name, _, _, _ = get_fee_info(cur_code)
 
             console.print(Panel(
                 f"  Steam ID:     [cyan]{cfg.get('steam_id', '—')}[/cyan]\n"
                 f"  API Key:      {'[green]Set[/green]' if cfg.get('api_key') else '[dim]Not set[/dim]'}\n"
-                f"  Currency:     [cyan]{cur_name}[/cyan] (code {cur_code}) · Fee: {fee_str}\n"
-                f"  Cookie:       {'[green]Set[/green]' if cfg.get('steam_login_secure') or COOKIES_FILE.exists() else '[red]Not set[/red]'}",
+                f"  Currency:     [cyan]{cur_name}[/cyan] (code {cur_code}) · Fee: {fee_display(cur_code)}\n"
+                f"  Cookie:       {'[green]Set[/green]' if cfg.get('steam_login_secure') or COOKIES_FILE.exists() else '[red]Not set[/red]'}\n"
+                f"  Headless:     {'[yellow]Yes[/yellow]' if HEADLESS_MODE else '[green]No[/green]'}",
                 title="⚙ Settings",
                 border_style="yellow",
             ))
@@ -941,7 +952,6 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
             sub = Prompt.ask("  ➤ Choose", choices=["1","2","3"], default="3")
             if sub == "1":
                 console.print()
-                console.print("[dim]Available currencies:[/dim]")
                 for code, (name, symbol, ft, fv) in sorted(CURRENCIES.items()):
                     fs = f"Rp {fv:.0f} flat" if ft == "flat" else f"{fv*100:.0f}%"
                     marker = " ◀ current" if code == cur_code else ""
@@ -952,7 +962,7 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
                 save_config(cfg)
                 client.cfg = cfg
                 new_name, _, _, _ = get_fee_info(new_cur)
-                console.print(f"[green]✅ Currency changed to {new_name}[/green]")
+                console.print(f"[green]✅ Currency → {new_name}[/green]")
             elif sub == "2":
                 cfg = setup_wizard(cfg)
                 client.cfg = cfg
@@ -964,15 +974,17 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
+    global HEADLESS_MODE
+
     parser = argparse.ArgumentParser(description="Steam Market Bot — TUI Edition")
-    parser.add_argument("--headless", action="store_true", help="Skip Playwright")
+    parser.add_argument("--headless", action="store_true", help="Skip Playwright (no buy order scraping)")
     args = parser.parse_args()
+    HEADLESS_MODE = args.headless
 
     show_banner()
 
     cfg = load_config()
 
-    # First-run setup
     if not cfg.get("steam_id"):
         cfg = setup_wizard(cfg)
 
@@ -1004,7 +1016,7 @@ def main():
     # Load inventory
     console.print()
     console.print("[bold]📦 Loading inventory...[/bold]")
-    time.sleep(10)  # Cooldown
+    time.sleep(10)
     items = client.get_all_inventory()
     if not items:
         console.print("[red]No marketable items found. Check inventory privacy.[/red]")
@@ -1012,10 +1024,7 @@ def main():
 
     console.print(f"\n[green bold]✅ {len(items)} marketable items loaded[/green bold]")
 
-    # Show dashboard first
     show_dashboard(client, items, vac_info)
-
-    # Main menu
     main_menu(client, items, vac_info)
 
 

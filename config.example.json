@@ -1,0 +1,12 @@
+{
+  "steam_id": "76561198000000000",
+  "steam_login_secure": "YOUR_SESSION_COOKIE_HERE",
+  "api_key": "",
+  "currency": 23,
+  "apps": [
+    {"app_id": 570, "name": "Dota 2", "context_id": 2},
+    {"app_id": 753, "name": "Steam", "context_id": 6}
+  ],
+  "min_price_cents": 1,
+  "max_price_cents": 9999999
+}

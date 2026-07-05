@@ -689,6 +689,143 @@ def estimate_worth(client: SteamClient, items: list[dict]):
 
 # ─── Main Menu ───────────────────────────────────────────────────────────────
 
+def manual_list(client: SteamClient, items: list[dict]):
+    """Manual listing: user picks an item, sees market data, inputs price."""
+    cur_code = client.cfg.get("currency", 23)
+    cur_name, cur_symbol, fee_type, fee_val = get_fee_info(cur_code)
+    app_map = {a["app_id"]: a["name"] for a in client.cfg.get("apps", [])}
+
+    console.print()
+    console.print("[bold cyan]✏️  Manual Listing[/bold cyan]")
+    console.print()
+
+    # Show inventory with numbers
+    page_size = 20
+    page = 0
+    total_pages = (len(items) - 1) // page_size + 1
+
+    while True:
+        start = page * page_size
+        end = min(start + page_size, len(items))
+        page_items = items[start:end]
+
+        table = Table(title=f"📦 Inventory (page {page+1}/{total_pages})", box=box.ROUNDED, border_style="cyan")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("Item")
+        table.add_column("Game", style="yellow")
+        table.add_column("Type", style="dim")
+
+        for i, item in enumerate(page_items):
+            idx = start + i + 1
+            game = app_map.get(item["app_id"], f"App {item['app_id']}")
+            table.add_row(str(idx), item["name"][:40], game, item.get("type", "")[:25])
+
+        console.print(table)
+        console.print()
+        console.print(f"[dim]Enter item number (1-{len(items)}), [cyan]n[/cyan]=next page, [cyan]p[/cyan]=prev page, [cyan]0[/cyan]=back[/dim]")
+        choice = Prompt.ask("  ➤ Choose")
+
+        if choice == "0":
+            return
+        elif choice == "n" and page < total_pages - 1:
+            page += 1
+            continue
+        elif choice == "p" and page > 0:
+            page -= 1
+            continue
+
+        try:
+            idx = int(choice) - 1
+        except ValueError:
+            console.print("[red]Invalid input[/red]")
+            continue
+
+        if idx < 0 or idx >= len(items):
+            console.print("[red]Item not found[/red]")
+            continue
+
+        item = items[idx]
+        game = app_map.get(item["app_id"], f"App {item['app_id']}")
+
+        # Fetch market data
+        console.print()
+        console.print(f"[bold]Fetching market data for: [cyan]{item['name']}[/cyan][/bold]")
+        with console.status("[cyan]Scraping buy order...[/cyan]"):
+            buy_idr, sell_idr = client.scrape_buy_order(item["mhn"], item["app_id"])
+
+        # Also try priceoverview
+        with console.status("[cyan]Getting price overview...[/cyan]"):
+            price_data = client.get_price_overview(item["mhn"], item["app_id"])
+
+        console.print()
+        console.print(Panel(
+            f"  [bold]Item:[/bold]      {item['name']}\n"
+            f"  [bold]Game:[/bold]      {game}\n"
+            f"  [bold]Type:[/bold]      {item.get('type', '—')}\n"
+            f"\n"
+            f"  [cyan]Buy Order:[/cyan]    {fmt_idr(buy_idr) if buy_idr else '[dim]None[/dim]'}\n"
+            f"  [yellow]Lowest Sell:[/yellow] {fmt_idr(sell_idr) if sell_idr else '[dim]None[/dim]'}\n"
+            f"  [dim]Price Overview:[/dim]  {price_data.get('lowest', '—') if price_data else '—'}\n"
+            f"\n"
+            f"  [dim]Fee: {cur_name} — {'Rp '+str(int(fee_val))+' flat' if fee_type=='flat' else str(int(fee_val*100))+'%'}</dim>",
+            title=f"🏷 {item['name']}",
+            border_style="cyan",
+        ))
+
+        console.print()
+        console.print(f"[bold]Enter price as [cyan]buyer pays[/cyan] amount ({cur_name})[/bold]")
+        if buy_idr:
+            console.print(f"  [dim]Buy order: {fmt_idr(buy_idr)} → instant sale[/dim]")
+        if sell_idr:
+            console.print(f"  [dim]Lowest sell: {fmt_idr(sell_idr)} → competitive[/dim]")
+        console.print(f"  [dim]Enter 0 to skip this item[/dim]")
+        console.print()
+
+        price_input = IntPrompt.ask("  ➤ Buyer pays amount", default=buy_idr or sell_idr or 0)
+
+        if price_input <= 0:
+            console.print("[dim]Skipped[/dim]")
+            continue
+
+        # Calculate listing price
+        price_to_send = calc_listing_price(price_input, cur_code)
+        seller = price_to_send // 100
+        actual_buyer = calc_buyer_pays(seller, cur_code)
+
+        if fee_type == "flat":
+            fee_display = f"Rp {int(fee_val)}"
+        else:
+            fee_display = f"{int(fee_val*100)}%"
+
+        console.print()
+        console.print(Panel(
+            f"  [bold]You entered (buyer pays):[/bold]  {fmt_idr(price_input)}\n"
+            f"  [green]Seller receives:[/green]         {fmt_idr(seller)}\n"
+            f"  [yellow]Fee:[/yellow]                    {fee_display}\n"
+            f"  [cyan]Price to send:[/cyan]            {price_to_send} sen\n"
+            f"  [dim]Verify → buyer pays:[/dim]       {fmt_idr(actual_buyer)}",
+            title="📋 Listing Preview",
+            border_style="yellow",
+        ))
+
+        console.print()
+        if not Confirm.ask("  ➤ List this item?", default=True):
+            console.print("[dim]Cancelled[/dim]")
+            continue
+
+        # List it
+        ok, msg = client.sell_item(item, price_to_send)
+        if ok:
+            console.print(f"[green bold]✅ Listed! Buyer pays {fmt_idr(actual_buyer)}[/green bold]")
+            items.remove(item)
+        else:
+            console.print(f"[red bold]✗ Failed: {msg}[/red bold]")
+
+        console.print()
+        if not Confirm.ask("  List another item?", default=True):
+            return
+
+
 def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
     """Main interactive menu."""
     scan_cache = []
@@ -704,11 +841,12 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
             "  [bold]5[/bold]  💰  Estimate inventory worth\n"
             "  [bold]6[/bold]  🔄  Refresh inventory\n"
             "  [bold]7[/bold]  ⚙   Settings\n"
+            "  [bold]8[/bold]  ✏️   Manual listing (set price yourself)\n"
             "  [bold]0[/bold]  🚪  Exit",
             border_style="cyan",
         ))
 
-        choice = Prompt.ask("\n[bold]Choose[/bold]", choices=["0","1","2","3","4","5","6","7"], default="1")
+        choice = Prompt.ask("\n[bold]Choose[/bold]", choices=["0","1","2","3","4","5","6","7","8"], default="1")
 
         if choice == "0":
             console.print("[dim]Bye![/dim]")
@@ -818,6 +956,9 @@ def main_menu(client: SteamClient, items: list[dict], vac_info: dict | None):
             elif sub == "2":
                 cfg = setup_wizard(cfg)
                 client.cfg = cfg
+
+        elif choice == "8":
+            manual_list(client, items)
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
